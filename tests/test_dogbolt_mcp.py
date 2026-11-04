@@ -5,6 +5,8 @@ normalization, result filtering and progress accounting, which are the parts
 that encode the (verified) Dogbolt API semantics.
 """
 
+import asyncio
+
 import dogbolt_mcp as db
 import httpx
 
@@ -295,3 +297,112 @@ def test_comparison_rows_from_entries(tmp_path):
 
 def test_server_exposes_compare_tool():
     assert hasattr(db, "compare_decompilers")
+
+
+# --------------------------------------------------------------------------- #
+# Version comparison (semantic, not lexical)
+# --------------------------------------------------------------------------- #
+def test_parse_version_orders_numerically():
+    assert db._parse_version("10.0") > db._parse_version("9.0")
+    assert db._parse_version("10.1") > db._parse_version("9.2")
+
+
+def test_parse_version_handles_suffixes_and_garbage():
+    assert db._parse_version("10.2.1-dev") == (10, 2, 1)
+    assert db._parse_version("") == (0,)
+    assert db._parse_version(None) == (0,)
+    assert db._parse_version("v2") == (2,)
+
+
+def test_best_by_name_picks_10_over_9(tmp_path):
+    results = [
+        _result("Ghidra", version="9.2"),
+        _result("Ghidra", version="10.1"),
+    ]
+    best = db._best_by_name(results)
+    assert best["Ghidra"]["decompiler"]["version"] == "10.1"
+
+
+# --------------------------------------------------------------------------- #
+# HTTP error handling (no crash on 404 / network failure)
+# --------------------------------------------------------------------------- #
+def _mock_client(handler):
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def test_fetch_all_results_404_is_captured():
+    def handler(request):
+        return httpx.Response(404, json={"detail": "Not found."})
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db.fetch_all_results(client, "https://x/api/binaries/bad/decompilations/")
+
+    outcome = asyncio.run(run())
+    assert outcome.results == []
+    assert "404" in outcome.error
+
+
+def test_fetch_all_results_network_error_is_captured():
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db.fetch_all_results(client, "https://x/api/decompilers/")
+
+    outcome = asyncio.run(run())
+    assert outcome.error and "communication" in outcome.error
+
+
+def test_summarize_reports_fetch_error():
+    outcome = db.FetchOutcome(error="Ressource introuvable sur Dogbolt (404).")
+    report = db.summarize(outcome, expected=13)
+    assert report["error"] == "Ressource introuvable sur Dogbolt (404)."
+
+
+def test_summarize_omits_error_when_clean():
+    outcome = db.FetchOutcome(results=[_result("Ghidra")], count=1, seen=1)
+    assert "error" not in db.summarize(outcome, expected=13)
+
+
+def test_get_decompilations_status_404_returns_error():
+    def handler(request):
+        return httpx.Response(404, json={"detail": "Not found."})
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db.fetch_all_results(
+                client, "https://x/api/binaries/bad/decompilations/"
+            )
+
+    outcome = asyncio.run(run())
+    assert outcome.error and "404" in outcome.error
+
+
+def test_poll_until_returns_immediately_when_ready():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "count": 1,
+                "next": None,
+                "previous": None,
+                "results": [_result("Ghidra")],
+            },
+        )
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db._poll_until(
+                client, "https://x/api/binaries/1/decompilations/",
+                "ghidra", expected=1, timeout_seconds=30, poll_interval=5,
+            )
+
+    selected, progress, elapsed = asyncio.run(run())
+    assert len(selected) == 1
+    assert elapsed == 0
+    assert calls["n"] == 1

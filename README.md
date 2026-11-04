@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-6E4AFF.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
+[![Tests](https://img.shields.io/badge/tests-46%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
 [![Dogbolt](https://img.shields.io/badge/dogbolt.org-public%20API-orange.svg)](https://dogbolt.org)
 
 An [MCP](https://modelcontextprotocol.io) server that lets an LLM (Claude
@@ -165,6 +165,16 @@ Two more behaviours worth knowing:
 Set `DOGBOLT_BASE_URL` to point at a self-hosted instance (default
 `https://dogbolt.org`). `DOGBOLT_CACHE` overrides the cache path and
 `DOGBOLT_CACHE_DISABLE=1` disables it.
+
+### Compatibility and robustness
+
+* Works with `mcp` 1.x and 2.x (the SDK's server class is imported with a
+  fallback). Annotations are real types at runtime (no `from __future__ import
+  annotations`), so signature introspection on older SDKs cannot break.
+* HTTP failures never crash a tool: a bad `binary_id` (404), a throttled upload
+  (429) or a network outage returns a structured `{"error": ...}`.
+* The first poll runs immediately, so an already-analysed binary returns at
+  once instead of waiting one polling interval.
 
 ### Inspector
 
