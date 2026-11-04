@@ -147,3 +147,151 @@ def test_retry_after_default_when_garbage():
     request = httpx.Request("POST", "https://dogbolt.org/api/binaries/")
     response = httpx.Response(429, headers={"Retry-After": "soon"}, request=request)
     assert db._retry_after(response, default=7) == 7.0
+
+
+# --------------------------------------------------------------------------- #
+# Engine selection
+# --------------------------------------------------------------------------- #
+def test_resolve_engines_single_name():
+    assert db.resolve_engines("Ghidra") == ["Ghidra"]
+
+
+def test_resolve_engines_comma_string():
+    assert db.resolve_engines("ghidra, hex-rays , binaryninja") == [
+        "ghidra",
+        "hex-rays",
+        "binaryninja",
+    ]
+
+
+def test_resolve_engines_list():
+    assert db.resolve_engines(["Ghidra", "angr"]) == ["Ghidra", "angr"]
+
+
+def test_resolve_engines_all_means_everything():
+    assert db.resolve_engines("all") is None
+    assert db.resolve_engines(["all"]) is None
+
+
+def test_resolve_engines_empty_and_none():
+    assert db.resolve_engines(None) is None
+    assert db.resolve_engines("") is None
+    assert db.resolve_engines("  ") is None
+    assert db.resolve_engines([]) is None
+
+
+def test_best_by_name_keeps_highest_version():
+    results = [
+        _result("Ghidra", version="10.0"),
+        _result("Ghidra", version="12.1"),
+        _result("angr", version="9.0"),
+    ]
+    best = db._best_by_name(results)
+    assert best["Ghidra"]["decompiler"]["version"] == "12.1"
+    assert set(best) == {"Ghidra", "angr"}
+
+
+def test_match_engines_multi_and_normalized():
+    results = [_result("Ghidra"), _result("rev.ng"), _result("Snowman")]
+    picked = db.match_engines(results, ["ghidra", "revng"])
+    assert {r["decompiler"]["name"] for r in picked} == {"Ghidra", "rev.ng"}
+
+
+def test_select_results_with_list_selector():
+    results = [_result("Ghidra"), _result("angr"), _result("Hex-Rays")]
+    picked = db.select_results(results, ["ghidra", "hex-rays"])
+    assert {r["decompiler"]["name"] for r in picked} == {"Ghidra", "Hex-Rays"}
+
+
+def test_select_results_dedups_versions():
+    results = [
+        _result("Ghidra", version="10.0"),
+        _result("Ghidra", version="12.1"),
+    ]
+    picked = db.select_results(results, "ghidra")
+    assert len(picked) == 1
+    assert picked[0]["decompiler"]["version"] == "12.1"
+
+
+# --------------------------------------------------------------------------- #
+# output_dir helpers
+# --------------------------------------------------------------------------- #
+def test_safe_component():
+    assert db._safe_component("Hex-Rays") == "hex-rays"
+    assert db._safe_component("rev.ng") == "rev.ng"
+    assert db._safe_component("a/b c") == "a-b-c"
+
+
+def test_summarize_code_counts():
+    code = "\n".join(f"line {i}" for i in range(50))
+    summary = db.summarize_code(code, preview_lines=10)
+    assert summary["lines"] == 50
+    assert summary["size_kb"] > 0
+    assert summary["preview"].count("\n") == 9
+    assert summary["preview"].startswith("line 0")
+
+
+def test_write_code_file_creates_dir_and_file(tmp_path):
+    out = tmp_path / "nested" / "decompiled"
+    code = "int main() {\n  return 0;\n}\n"
+    summary = db.write_code_file(str(out), "crackme", "Hex-Rays", code)
+    written = out / "crackme.hex-rays.c"
+    assert written.is_file()
+    assert written.read_text() == code
+    assert summary["path"] == str(written.resolve())
+    assert summary["lines"] == 3
+
+
+def test_write_code_file_overwrites(tmp_path):
+    db.write_code_file(str(tmp_path), "b", "Ghidra", "old")
+    summary = db.write_code_file(str(tmp_path), "b", "Ghidra", "new")
+    assert (tmp_path / "b.ghidra.c").read_text() == "new"
+    assert summary["lines"] == 1
+
+
+def test_format_duration():
+    assert db.format_duration(4.81234) == "4.81s"
+    assert db.format_duration(None) == "-"
+    assert db.format_duration("n/a") == "-"
+
+
+def test_build_comparison_table_has_header_and_rows():
+    rows = [
+        {
+            "engine": "Hex-Rays",
+            "status": "Succès",
+            "time": "1.20s",
+            "lines": 142,
+            "detail": "`tiny.hex-rays.c`",
+        },
+        {
+            "engine": "Ghidra",
+            "status": "Échec",
+            "time": "-",
+            "lines": "-",
+            "detail": "boom",
+        },
+    ]
+    table = db.build_comparison_table(rows)
+    assert table.splitlines()[0].startswith("| Moteur |")
+    assert "| Hex-Rays | Succès | 1.20s | 142 |" in table
+    assert "| Ghidra | Échec |" in table
+
+
+def test_comparison_rows_from_entries(tmp_path):
+    decompilations = [
+        {"decompiler": "Ghidra", "analysis_time": 4.8, "file": "/x/b.ghidra.c", "lines": 210},
+        {"decompiler": "Hex-Rays", "analysis_time": 1.2, "code": "int main(){}\n"},
+        {"decompiler": "RetDec", "analysis_time": None, "error": "crash"},
+    ]
+    rows = db._comparison_rows(decompilations)
+    by_engine = {r["engine"]: r for r in rows}
+    assert by_engine["Ghidra"]["detail"] == "`b.ghidra.c`"
+    assert by_engine["Ghidra"]["lines"] == 210
+    assert by_engine["Hex-Rays"]["lines"] == 1
+    assert by_engine["Hex-Rays"]["detail"] == "inline"
+    assert by_engine["RetDec"]["status"] == "Échec"
+
+
+def test_server_exposes_compare_tool():
+    assert hasattr(db, "compare_decompilers")
