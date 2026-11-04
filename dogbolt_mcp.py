@@ -23,13 +23,12 @@ Privacy: uploaded binaries are stored publicly. Never send secrets or
 proprietary binaries. Fair use: do not hammer the public service.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -130,6 +129,16 @@ def normalize_name(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
+def _parse_version(version: Any) -> tuple:
+    """Numeric version key for comparison (``"9.2"`` < ``"10.1"``).
+
+    Splits the string into its integer runs so ``"10.2.1-dev"`` becomes
+    ``(10, 2, 1)``. Avoids the lexical trap where ``"9.2" > "10.1"``.
+    """
+    digits = re.findall(r"\d+", str(version))
+    return tuple(int(part) for part in digits) if digits else (0,)
+
+
 def resolve_engines(target: Any) -> Optional[List[str]]:
     """Normalize an engine selector into a list of tokens.
 
@@ -156,8 +165,8 @@ def _best_by_name(results: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         if not name:
             continue
         current = best.get(name)
-        if current is None or str(info.get("version", "")) > str(
-            (current.get("decompiler") or {}).get("version", "")
+        if current is None or _parse_version(info.get("version")) > _parse_version(
+            (current.get("decompiler") or {}).get("version")
         ):
             best[name] = item
     return best
@@ -245,6 +254,7 @@ class FetchOutcome:
     count: int = 0
     next_url: Optional[str] = None
     seen: int = 0
+    error: Optional[str] = None
 
     @property
     def finished(self) -> int:
@@ -254,13 +264,16 @@ class FetchOutcome:
 def summarize(outcome: FetchOutcome, expected: int) -> Dict[str, Any]:
     """Progress report: how many decompilers finished / failed / are pending."""
     failed = [item for item in outcome.results if item.get("error") is not None]
-    return {
+    report = {
         "uploaded_count": outcome.count,
         "finished": outcome.finished,
         "failed": len(failed),
         "pending": max(outcome.count - outcome.seen, 0),
         "expected_total": expected,
     }
+    if outcome.error:
+        report["error"] = outcome.error
+    return report
 
 
 # --------------------------------------------------------------------------- #
@@ -274,14 +287,37 @@ async def _get_json(
     return response.json()
 
 
+def _http_error_message(exc: httpx.HTTPError) -> str:
+    """Human-readable message for an httpx failure, with 404/429/5xx detail."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code == 404:
+            return "Ressource introuvable sur Dogbolt (404)."
+        if code == 429:
+            detail = _detail(exc.response) or "trop de requêtes"
+            return f"Dogbolt limite le débit ({detail})."
+        if code >= 500:
+            return f"Dogbolt est indisponible (HTTP {code}). Réessayez plus tard."
+        return f"Dogbolt a répondu HTTP {code}."
+    return f"Erreur de communication avec Dogbolt : {exc}"
+
+
 async def fetch_all_results(
     client: httpx.AsyncClient, url: str
 ) -> FetchOutcome:  # pragma: no cover - exercised against the live API
-    """Follow the pagination chain of a list endpoint and collect every item."""
+    """Follow the pagination chain of a list endpoint and collect every item.
+
+    Network and HTTP errors are captured into ``outcome.error`` instead of
+    propagating, so a bad id or a transient outage never crashes the tool.
+    """
     outcome = FetchOutcome()
     next_url: Optional[str] = url
     while next_url:
-        data = await _get_json(client, next_url)
+        try:
+            data = await _get_json(client, next_url)
+        except httpx.HTTPError as exc:
+            outcome.error = _http_error_message(exc)
+            break
         if not isinstance(data, dict):
             break
         outcome.results.extend(data.get("results", []))
@@ -374,18 +410,24 @@ async def _poll_until(
     timeout_seconds: int,
     poll_interval: int = 5,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any], int]:
-    """Poll until ``expected`` matching results are ready (or the timeout)."""
+    """Poll until ``expected`` matching results are ready (or the timeout).
+
+    The first check runs immediately: a binary already analysed on Dogbolt (or
+    served from the local cache) returns without paying a needless sleep.
+    """
     elapsed = 0
     selected: List[Dict[str, Any]] = []
     progress: Dict[str, Any] = {}
-    while elapsed < timeout_seconds:
-        await asyncio.sleep(poll_interval)
-        elapsed += poll_interval
+    while True:
         outcome = await fetch_all_results(client, results_url)
         progress = summarize(outcome, expected)
         selected = select_results(outcome.results, target)
-        if len(selected) >= expected:
+        if outcome.error or len(selected) >= expected:
             break
+        if elapsed >= timeout_seconds:
+            break
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
     return selected, progress, elapsed
 
 
@@ -423,6 +465,8 @@ async def _analyse(
         selected, progress, elapsed = await _poll_until(
             client, results_url, selector, expected, timeout_seconds
         )
+        if progress.get("error"):
+            return {"error": progress["error"], "binary_id": binary_id}
 
         payload: Dict[str, Any] = {
             "binary_id": binary_id,
@@ -514,12 +558,15 @@ async def list_available_decompilers(limit: int = 50) -> Dict[str, Any]:
             client, f"{BASE_URL}/api/decompilers/"
         )
 
+    if outcome.error:
+        return {"error": outcome.error}
+
     best: Dict[str, Dict[str, Any]] = {}
     for entry in outcome.results:
         name = entry.get("name", "inconnu")
         current = best.get(name)
-        if current is None or str(entry.get("version", "")) > str(
-            current.get("version", "")
+        if current is None or _parse_version(entry.get("version")) > _parse_version(
+            current.get("version")
         ):
             best[name] = entry
 
@@ -545,6 +592,9 @@ async def get_decompilations_status(
         outcome = await fetch_all_results(
             client, f"{BASE_URL}/api/binaries/{binary_id}/decompilations/"
         )
+
+    if outcome.error:
+        return {"binary_id": binary_id, "error": outcome.error}
 
     return {
         "binary_id": binary_id,
