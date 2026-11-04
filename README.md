@@ -1,5 +1,12 @@
 # Dogbolt MCP server
 
+[![CI](https://github.com/kadohack12/dogbolt-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/kadohack12/dogbolt-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/MCP-compatible-6E4AFF.svg)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-20%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
+[![Dogbolt](https://img.shields.io/badge/dogbolt.org-public%20API-orange.svg)](https://dogbolt.org)
+
 An [MCP](https://modelcontextprotocol.io) server that lets an LLM (Claude
 Desktop, Cursor, ...) send a binary to [dogbolt.org](https://dogbolt.org) and
 read back the C code produced by its fleet of decompilers (Ghidra,
@@ -8,6 +15,14 @@ Hex-Rays/IDA, Binary Ninja, angr, Snowman, RetDec, Reko, ...).
 Dogbolt is asynchronous: you upload a binary, it returns an id, and a set of
 workers decompile it in the background. This server hides the polling loop and
 returns the finished results.
+
+> Reverse engineering · Decompiler · Binary analysis · Model Context Protocol
+
+**Tags:** `mcp` · `model-context-protocol` · `mcp-server` · `dogbolt` ·
+`decompiler` · `reverse-engineering` · `reverse-engineering-tools` ·
+`binary-analysis` · `ghidra` · `hex-rays` · `ida-pro` · `binary-ninja` · `angr` ·
+`retdec` · `snowman` · `security-tools` · `malware-analysis` · `python` ·
+`claude-desktop` · `cursor` · `llm` · `ai-tools` · `llm-tools`
 
 ## ⚠️ Privacy and fair use
 
@@ -146,3 +161,21 @@ against the live API.
 > explique ce que fait `main`."
 
 The assistant calls `decompile_binary` and analyses the returned C.
+
+## License
+
+[MIT](LICENSE) — free to use, modify and redistribute.
+
+## Contributing
+
+Issues and pull requests are welcome. Run the test suite before opening a PR:
+
+```bash
+pip install "mcp[cli]" httpx pytest
+python -m pytest -q
+```
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=kadohack12/dogbolt-mcp&type=Date)](https://star-history.com/#kadohack12/dogbolt-mcp&Date)
+
