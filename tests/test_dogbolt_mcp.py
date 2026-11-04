@@ -6,6 +6,7 @@ that encode the (verified) Dogbolt API semantics.
 """
 
 import dogbolt_mcp as db
+import httpx
 
 
 def test_normalize_name_strips_punctuation():
@@ -97,3 +98,52 @@ def test_server_exposes_expected_tools():
         "decompile_binary",
     ):
         assert hasattr(db, expected)
+
+
+def test_sha256_file_matches_hashlib(tmp_path):
+    import hashlib
+
+    payload = b"\x7fELF" + b"hello world" * 1000
+    f = tmp_path / "bin"
+    f.write_bytes(payload)
+    assert db.sha256_file(f) == hashlib.sha256(payload).hexdigest()
+
+
+def test_cache_roundtrip(tmp_path):
+    cache_file = tmp_path / "cache.json"
+    db.save_cache({"abc": "id-1"}, cache_file)
+    assert db.load_cache(cache_file) == {"abc": "id-1"}
+
+
+def test_load_cache_missing_file(tmp_path):
+    assert db.load_cache(tmp_path / "absent.json") == {}
+
+
+def test_load_cache_corrupt_file(tmp_path):
+    bad = tmp_path / "cache.json"
+    bad.write_text("{not valid json")
+    assert db.load_cache(bad) == {}
+
+
+def test_load_cache_non_dict(tmp_path):
+    bad = tmp_path / "cache.json"
+    bad.write_text("[1, 2, 3]")
+    assert db.load_cache(bad) == {}
+
+
+def test_retry_after_reads_header():
+    request = httpx.Request("POST", "https://dogbolt.org/api/binaries/")
+    response = httpx.Response(429, headers={"Retry-After": "6"}, request=request)
+    assert db._retry_after(response, default=10) == 6.0
+
+
+def test_retry_after_default_when_absent():
+    request = httpx.Request("POST", "https://dogbolt.org/api/binaries/")
+    response = httpx.Response(429, request=request)
+    assert db._retry_after(response, default=10) == 10.0
+
+
+def test_retry_after_default_when_garbage():
+    request = httpx.Request("POST", "https://dogbolt.org/api/binaries/")
+    response = httpx.Response(429, headers={"Retry-After": "soon"}, request=request)
+    assert db._retry_after(response, default=7) == 7.0

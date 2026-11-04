@@ -42,8 +42,28 @@ include_code=True, max_chars_per_decompiler=20000)`:
 * `include_code=False` — return only status, to avoid flooding the context.
 * Sources are truncated to `max_chars_per_decompiler` characters.
 
-Every call returns a dict containing `binary_id` and a `link`
-(`https://dogbolt.org/?id=<id>`) so results stay reachable later.
+Every call returns a dict containing `binary_id`, `sha256`, `from_cache` and a
+`link` (`https://dogbolt.org/?id=<id>`) so results stay reachable later.
+
+## SHA256 cache and rate limiting
+
+Dogbolt stores binaries under their SHA256 and **de-duplicates uploads**: the
+same bytes return the same `binary_id` without re-analysing. Uploads are also
+throttled (`429` with a `Retry-After` header).
+
+This server exploits both:
+
+* it hashes the file locally and keeps a `{sha256: binary_id}` cache, so a
+  repeated file skips the upload entirely (`from_cache: true` in the result);
+* on `429` it waits for `Retry-After` and retries (up to 3 times), instead of
+  hammering the public service.
+
+Cache location: `~/.cache/dogbolt-mcp/cache.json`. Override with
+`DOGBOLT_CACHE`, or disable with `DOGBOLT_CACHE_DISABLE=1`.
+
+Note: a cached `binary_id` is still re-polled, because Dogbolt may have run
+additional decompilers since the first analysis.
+
 
 ## Corrected API contract
 
@@ -71,6 +91,16 @@ Two traps:
 Dogbolt runs 13 decompilers today; `expected_total` (default 13) controls when
 `target_decompiler="all"` stops waiting.
 
+Two more behaviours worth knowing:
+
+* Uploads are **content-addressed by SHA256**: re-sending identical bytes
+  returns the same `binary_id` (the S3 key in `download_url` equals the file's
+  SHA256), so the same file is never analysed twice.
+* `POST /api/binaries/` is **throttled**: over the limit it answers `429` with
+  `{"detail": "Request was throttled. Expected available in N seconds."}` and a
+  `Retry-After` header. Respect it.
+
+
 ## Configuration
 
 ### Claude Desktop
@@ -91,7 +121,8 @@ Dogbolt runs 13 decompilers today; `expected_total` (default 13) controls when
 ```
 
 Set `DOGBOLT_BASE_URL` to point at a self-hosted instance (default
-`https://dogbolt.org`).
+`https://dogbolt.org`). `DOGBOLT_CACHE` overrides the cache path and
+`DOGBOLT_CACHE_DISABLE=1` disables it.
 
 ### Inspector
 
