@@ -380,6 +380,38 @@ def test_get_decompilations_status_404_returns_error():
     assert outcome.error and "404" in outcome.error
 
 
+def test_upload_binary_500_returns_error(tmp_path):
+    binary = tmp_path / "b.bin"
+    binary.write_bytes(b"\x7fELF")
+
+    def handler(request):
+        return httpx.Response(500, json={"detail": "server error"})
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db._upload_binary(client, binary)
+
+    data, error = asyncio.run(run())
+    assert data is None
+    assert error and "500" in error
+
+
+def test_upload_binary_network_error_returns_error(tmp_path):
+    binary = tmp_path / "b.bin"
+    binary.write_bytes(b"\x7fELF")
+
+    def handler(request):
+        raise httpx.ConnectError("no route")
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db._upload_binary(client, binary)
+
+    data, error = asyncio.run(run())
+    assert data is None
+    assert error and "communication" in error
+
+
 def test_poll_until_returns_immediately_when_ready():
     calls = {"n": 0}
 
