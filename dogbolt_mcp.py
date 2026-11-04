@@ -26,6 +26,8 @@ proprietary binaries. Fair use: do not hammer the public service.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -55,12 +57,56 @@ _PAGE_SIZE = 100
 # context window if returned verbatim.
 _NOISY_DECOMPILERS = {"angr", "RetDec"}
 
+# Dogbolt de-duplicates uploads by SHA256: re-sending the same bytes returns
+# the same ``binary_id``. Uploads are also throttled (HTTP 429). A local cache
+# keyed by content hash therefore avoids both a redundant upload and a 429.
+CACHE_PATH = Path(
+    os.environ.get(
+        "DOGBOLT_CACHE",
+        Path.home() / ".cache" / "dogbolt-mcp" / "cache.json",
+    )
+).expanduser()
+CACHE_ENABLED = os.environ.get("DOGBOLT_CACHE_DISABLE", "") == ""
+
 server = _MCPServer("dogbolt")
 
 
 # --------------------------------------------------------------------------- #
 # Pure helpers (no network, unit-tested)
 # --------------------------------------------------------------------------- #
+def sha256_file(path: Path) -> str:
+    """Stream a file through SHA256 (the key Dogbolt stores binaries under)."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_cache(path: Path = CACHE_PATH) -> Dict[str, str]:
+    """Read the ``{sha256: binary_id}`` cache, tolerating a missing/corrupt file."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def save_cache(cache: Dict[str, str], path: Path = CACHE_PATH) -> None:
+    """Persist the cache atomically; failures are non-fatal."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(cache, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def validate_binary_path(file_path: str) -> Optional[str]:
     """Return an error message, or ``None`` when the path is a valid binary."""
     if not file_path:
@@ -169,6 +215,49 @@ async def _download_code(
     return text
 
 
+async def _upload_binary(
+    client: httpx.AsyncClient, path: Path, max_retries: int = 3
+) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Upload ``path`` and return ``(payload, error)``.
+
+    Retries on HTTP 429 using the server's ``Retry-After`` hint, honouring the
+    public service's fair-use policy.
+    """
+    for attempt in range(max_retries + 1):
+        with open(path, "rb") as handle:
+            response = await client.post(
+                f"{BASE_URL}/api/binaries/",
+                files={"file": (path.name, handle, "application/octet-stream")},
+            )
+        if response.status_code == 413:
+            return None, "Erreur : Dogbolt refuse les binaires de plus de 2 Mo."
+        if response.status_code == 429:
+            if attempt == max_retries:
+                detail = _detail(response) or "trop de requêtes"
+                return None, f"Erreur : Dogbolt limite le débit ({detail})."
+            delay = _retry_after(response, default=10)
+            await asyncio.sleep(delay)
+            continue
+        response.raise_for_status()
+        return response.json(), None
+    return None, "Erreur : échec de l'upload après plusieurs tentatives."
+
+
+def _detail(response: httpx.Response) -> Optional[str]:
+    try:
+        return response.json().get("detail")
+    except ValueError:
+        return None
+
+
+def _retry_after(response: httpx.Response, default: int) -> float:
+    raw = response.headers.get("Retry-After")
+    try:
+        return max(float(raw), 0.0)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 # --------------------------------------------------------------------------- #
 # MCP tools
 # --------------------------------------------------------------------------- #
@@ -249,6 +338,10 @@ async def decompile_binary(
     The binary is stored publicly on dogbolt.org. Do not submit secrets or
     proprietary/confidential binaries.
 
+    Dogbolt de-duplicates by SHA256, so an identical file reuses the previous
+    analysis instead of being uploaded again; a local cache makes that reuse
+    instant across runs.
+
     :param file_path: Absolute path to the local binary.
     :param target_decompiler: Decompiler to wait for (e.g. ``Ghidra``,
         ``Hex-Rays``, ``BinaryNinja``, ``angr``), or ``all`` to wait for every
@@ -268,30 +361,27 @@ async def decompile_binary(
     wait_for_all = normalize_name(target) == "all"
     expected = EXPECTED_DECOMPILERS if wait_for_all else 1
 
+    digest = sha256_file(path)
+    cache = load_cache() if CACHE_ENABLED else {}
+    binary_id = cache.get(digest)
+    uploaded = False
+
     async with httpx.AsyncClient(
         headers={"User-Agent": USER_AGENT}, timeout=60.0
     ) as client:
-        with open(path, "rb") as handle:
-            upload = await client.post(
-                f"{BASE_URL}/api/binaries/",
-                files={"file": (path.name, handle, "application/octet-stream")},
-            )
-        if upload.status_code == 413:
-            return {"error": "Erreur : Dogbolt refuse les binaires de plus de 2 Mo."}
-        if upload.status_code == 429:
-            detail = upload.json().get("detail", "trop de requêtes")
-            return {"error": f"Erreur : Dogbolt limite le débit ({detail})."}
-        upload.raise_for_status()
-        data = upload.json()
+        if binary_id is None:
+            data, upload_error = await _upload_binary(client, path)
+            if upload_error:
+                return {"error": upload_error}
+            binary_id = data.get("id")
+            if not binary_id:
+                return {"error": "Erreur : aucun identifiant retourné par Dogbolt."}
+            uploaded = True
+            if CACHE_ENABLED:
+                cache[digest] = binary_id
+                save_cache(cache)
 
-        binary_id = data.get("id")
-        if not binary_id:
-            return {"error": "Erreur : aucun identifiant retourné par Dogbolt."}
-
-        results_url = data.get(
-            "decompilations_url",
-            f"{BASE_URL}/api/binaries/{binary_id}/decompilations/",
-        )
+        results_url = f"{BASE_URL}/api/binaries/{binary_id}/decompilations/"
 
         elapsed = 0
         poll_interval = 5
@@ -311,6 +401,8 @@ async def decompile_binary(
         payload: Dict[str, Any] = {
             "binary_id": binary_id,
             "link": f"{BASE_URL}/?id={binary_id}",
+            "sha256": digest,
+            "from_cache": not uploaded,
             "target_decompiler": target,
             "elapsed_seconds": elapsed,
             "progress": last_progress,
