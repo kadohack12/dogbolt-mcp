@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-6E4AFF.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-20%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
+[![Tests](https://img.shields.io/badge/tests-37%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
 [![Dogbolt](https://img.shields.io/badge/dogbolt.org-public%20API-orange.svg)](https://dogbolt.org)
 
 An [MCP](https://modelcontextprotocol.io) server that lets an LLM (Claude
@@ -47,15 +47,42 @@ automatically.
 | --- | --- |
 | `list_available_decompilers` | Distinct decompilers and their versions |
 | `decompile_binary` | Upload a binary and wait for the decompiled C |
+| `compare_decompilers` | Decompile with several engines and compare them |
 | `get_decompilations_status` | Progress/state of an already-uploaded binary |
 
+### `decompile_binary`
+
 `decompile_binary(file_path, target_decompiler="Ghidra", timeout_seconds=180,
-include_code=True, max_chars_per_decompiler=20000)`:
+include_code=True, max_chars_per_decompiler=20000, output_dir=None)`:
 
 * `target_decompiler` — a name (`Ghidra`, `Hex-Rays`, `BinaryNinja`, `angr`,
-  `rev.ng`, ...) or `all` to wait for every decompiler.
+  `rev.ng`, ...), a comma-separated list, or `all` for every decompiler.
 * `include_code=False` — return only status, to avoid flooding the context.
 * Sources are truncated to `max_chars_per_decompiler` characters.
+* `output_dir` — when set, write each source to `<binary>.<engine>.c` in that
+  directory (created if needed) and return only a compact summary per engine
+  (path, line count, size, head preview) instead of the code. Ideal for large
+  outputs.
+
+### `compare_decompilers`
+
+`compare_decompilers(file_path, engines=["Ghidra", "Hex-Rays", "BinaryNinja"],
+output_dir=None, timeout_seconds=180, max_chars_per_decompiler=8000)`:
+
+* One upload is shared across engines (same SHA256 cache).
+* Returns a Markdown comparison table plus per-engine details:
+
+  ```
+  | Moteur       | Statut | Temps  | Lignes | Fichier / Résumé   |
+  | ---          | ---    | ---    | ---    | ---                |
+  | Hex-Rays     | Succès | 3.32s  | 137    | `tiny.hex-rays.c`  |
+  | BinaryNinja  | Succès | 10.49s | 86     | `tiny.binaryninja.c` |
+  | Ghidra       | Succès | 46.71s | 135    | `tiny.ghidra.c`    |
+  ```
+
+* `engines` accepts a list or a comma-separated string.
+* With `output_dir`, files are written and only summaries are returned;
+  otherwise the code is returned inline (truncated).
 
 Every call returns a dict containing `binary_id`, `sha256`, `from_cache` and a
 `link` (`https://dogbolt.org/?id=<id>`) so results stay reachable later.
@@ -161,6 +188,12 @@ against the live API.
 > explique ce que fait `main`."
 
 The assistant calls `decompile_binary` and analyses the returned C.
+
+> "Compare la décompilation de /tmp/crackme.bin avec Ghidra, Hex-Rays et
+> Binary Ninja, et écris les résultats dans /tmp/out."
+
+The assistant calls `compare_decompilers` with `output_dir`, gets a comparison
+table plus the written file paths, and can then open the files it needs.
 
 ## License
 
