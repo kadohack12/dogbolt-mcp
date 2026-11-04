@@ -205,10 +205,6 @@ The assistant calls `decompile_binary` and analyses the returned C.
 The assistant calls `compare_decompilers` with `output_dir`, gets a comparison
 table plus the written file paths, and can then open the files it needs.
 
-## License
-
-[MIT](LICENSE) — free to use, modify and redistribute.
-
 ## Contributing
 
 Issues and pull requests are welcome. Run the test suite before opening a PR:
@@ -218,7 +214,7 @@ pip install "mcp[cli]" httpx pytest
 python -m pytest -q
 ```
 
-## Star history
+## License
 
-[![Star History Chart](https://api.star-history.com/svg?repos=kadohack12/dogbolt-mcp&type=Date)](https://star-history.com/#kadohack12/dogbolt-mcp&Date)
+[MIT](LICENSE) — free to use, modify and redistribute.
 
