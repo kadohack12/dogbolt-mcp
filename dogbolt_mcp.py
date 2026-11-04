@@ -348,11 +348,14 @@ async def _upload_binary(
     public service's fair-use policy.
     """
     for attempt in range(max_retries + 1):
-        with open(path, "rb") as handle:
-            response = await client.post(
-                f"{BASE_URL}/api/binaries/",
-                files={"file": (path.name, handle, "application/octet-stream")},
-            )
+        try:
+            with open(path, "rb") as handle:
+                response = await client.post(
+                    f"{BASE_URL}/api/binaries/",
+                    files={"file": (path.name, handle, "application/octet-stream")},
+                )
+        except httpx.HTTPError as exc:
+            return None, _http_error_message(exc)
         if response.status_code == 413:
             return None, "Erreur : Dogbolt refuse les binaires de plus de 2 Mo."
         if response.status_code == 429:
@@ -362,7 +365,10 @@ async def _upload_binary(
             delay = _retry_after(response, default=10)
             await asyncio.sleep(delay)
             continue
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return None, _http_error_message(exc)
         return response.json(), None
     return None, "Erreur : échec de l'upload après plusieurs tentatives."
 
