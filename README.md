@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-6E4AFF.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-48%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
+[![Tests](https://img.shields.io/badge/tests-52%20passed-brightgreen.svg)](tests/test_dogbolt_mcp.py)
 [![Dogbolt](https://img.shields.io/badge/dogbolt.org-public%20API-orange.svg)](https://dogbolt.org)
 
 An [MCP](https://modelcontextprotocol.io) server that lets an LLM (Claude
