@@ -438,3 +438,50 @@ def test_poll_until_returns_immediately_when_ready():
     assert len(selected) == 1
     assert elapsed == 0
     assert calls["n"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Noisy decompilers and code download robustness
+# --------------------------------------------------------------------------- #
+def test_noisy_decompilers_are_normalized():
+    for name in ("angr", "Angr", "RetDec", "retdec"):
+        assert db.normalize_name(name) in db._NOISY_DECOMPILERS
+
+
+def test_download_code_network_error_is_captured():
+    def handler(request):
+        raise httpx.ConnectError("no route")
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db._download_code(client, "https://x/code.c", 100)
+
+    text = asyncio.run(run())
+    assert "échec du téléchargement" in text
+
+
+def test_download_code_non_200_is_captured():
+    def handler(request):
+        return httpx.Response(404)
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db._download_code(client, "https://x/code.c", 100)
+
+    text = asyncio.run(run())
+    assert "HTTP 404" in text
+
+
+def test_download_code_truncates():
+    body = "x" * 500
+
+    def handler(request):
+        return httpx.Response(200, text=body)
+
+    async def run():
+        async with _mock_client(handler) as client:
+            return await db._download_code(client, "https://x/code.c", 100)
+
+    text = asyncio.run(run())
+    assert text.startswith("x" * 100)
+    assert "tronqué à 100" in text
