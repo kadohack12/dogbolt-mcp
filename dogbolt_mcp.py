@@ -53,8 +53,9 @@ DEFAULT_TIMEOUT_SECONDS = 180
 EXPECTED_DECOMPILERS = 13
 _PAGE_SIZE = 100
 # Sources whose text is almost always useless to an LLM and would blow up the
-# context window if returned verbatim.
-_NOISY_DECOMPILERS = {"angr", "RetDec"}
+# context window if returned verbatim. Names are stored normalized (see
+# ``normalize_name``) because that is how they are looked up at line ~507.
+_NOISY_DECOMPILERS = {"angr", "retdec"}
 
 # Dogbolt de-duplicates uploads by SHA256: re-sending the same bytes returns
 # the same ``binary_id``. Uploads are also throttled (HTTP 429). A local cache
@@ -330,7 +331,10 @@ async def fetch_all_results(
 async def _download_code(
     client: httpx.AsyncClient, url: str, max_chars: Optional[int]
 ) -> str:
-    response = await client.get(url)
+    try:
+        response = await client.get(url)
+    except httpx.HTTPError as exc:
+        return f"[échec du téléchargement du code : {exc}]"
     if response.status_code != 200:
         return f"[échec du téléchargement du code : HTTP {response.status_code}]"
     text = response.text
