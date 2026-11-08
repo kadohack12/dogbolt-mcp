@@ -1,6 +1,6 @@
 # Dogbolt MCP server
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/kadohack12/dogbolt-mcp)](https://m8ven.ai/mcp/kadohack12/dogbolt-mcp?s=readme)
+[![M8ven Score](https://m8ven.ai/badge/mcp/kadohack12-dogbolt-mcp-h7u69x?v=16758c91d7fa3bf04680f0e55d0b4513)](https://m8ven.ai/mcp/kadohack12-dogbolt-mcp-h7u69x?s=readme)
 [![CI](https://github.com/kadohack12/dogbolt-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/kadohack12/dogbolt-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
